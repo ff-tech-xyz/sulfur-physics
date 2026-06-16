@@ -18,11 +18,12 @@ import xyz.fftech.sulfurphysics.SulfurPhysics;
 public abstract class ServerExplosionMixin {
     @Shadow @Final private ServerLevel level;
     @Shadow @Final private Vec3 center;
+    @Shadow @Final private float radius;
 
     @Inject(method = "calculateExplodedPositions", at = @At("RETURN"), cancellable = true)
     private void sulfurPhysics$replaceOuterBlocksWithCubes(CallbackInfoReturnable<List<BlockPos>> cir) {
         List<BlockPos> affectedBlocks = cir.getReturnValue();
-        SulfurPhysics.replaceOuterExplosionBlocks(this.level, this.center, affectedBlocks);
+        SulfurPhysics.replaceOuterExplosionBlocks(this.level, this.center, this.radius, affectedBlocks);
         cir.setReturnValue(affectedBlocks);
     }
 }

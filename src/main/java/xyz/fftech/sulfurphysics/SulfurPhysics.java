@@ -37,19 +37,21 @@ public final class SulfurPhysics implements ModInitializer {
 
     /** Blocks inside the 3x3x3 around the explosion center are left to vanilla. */
     private static final int VANILLA_BREAK_CHEBYSHEV_RADIUS = 1;
-    private static final int SETTLE_TICKS_REQUIRED = 8;
-    private static final int MIN_AGE_BEFORE_SETTLE = 6;
-    private static final int MAX_CARRY_TICKS = 20 * 12;
+    private static final int SETTLE_TICKS_REQUIRED = 12;
+    private static final int MIN_AGE_BEFORE_SETTLE = 24;
+    private static final int MAX_CARRY_TICKS = 20 * 20;
     private static final int INVISIBILITY_REFRESH_THRESHOLD_TICKS = 40;
     private static final int INVISIBILITY_DURATION_TICKS = MAX_CARRY_TICKS + INVISIBILITY_REFRESH_THRESHOLD_TICKS;
     private static final double STOP_SPEED_SQR = 0.0009D;
-    private static final double EXPLOSION_BASE_IMPULSE = 0.76D;
-    private static final double EXPLOSION_MIN_IMPULSE = 0.18D;
-    private static final double EXPLOSION_MAX_IMPULSE = 1.05D;
-    private static final double EXPLOSION_UPWARD_BIAS = 0.32D;
-    private static final double MANUAL_GRAVITY = 0.045D;
-    private static final double AIR_DRAG = 0.96D;
-    private static final double GROUND_FRICTION = 0.62D;
+    private static final double DEFAULT_EXPLOSION_RADIUS = 4.0D;
+    private static final double EXPLOSION_MIN_IMPULSE = 0.55D;
+    private static final double EXPLOSION_MAX_IMPULSE = 2.25D;
+    private static final double EXPLOSION_IMPULSE_MULTIPLIER = 1.45D;
+    private static final double EXPLOSION_FALLOFF_RANGE_MULTIPLIER = 1.65D;
+    private static final double EXPLOSION_UPWARD_BIAS = 0.42D;
+    private static final double MANUAL_GRAVITY = 0.04D;
+    private static final double AIR_DRAG = 0.985D;
+    private static final double GROUND_FRICTION = 0.72D;
     private static final double COLLISION_DAMPING = 0.25D;
     private static final double COLLISION_EPSILON = 1.0E-5D;
     private static final float IMMOVABLE_EXPLOSION_RESISTANCE = 100.0F;
@@ -61,7 +63,7 @@ public final class SulfurPhysics implements ModInitializer {
         LOGGER.info("Sulfur Physics loaded; explosions now convert outer affected blocks into moving sulfur cubes.");
     }
 
-    public static void replaceOuterExplosionBlocks(ServerLevel level, Vec3 center, List<BlockPos> affectedBlocks) {
+    public static void replaceOuterExplosionBlocks(ServerLevel level, Vec3 center, float radius, List<BlockPos> affectedBlocks) {
         if (affectedBlocks.isEmpty()) {
             return;
         }
@@ -94,7 +96,7 @@ public final class SulfurPhysics implements ModInitializer {
                 continue;
             }
 
-            if (spawnMovingSulfurCube(level, center, pos, state)) {
+            if (spawnMovingSulfurCube(level, center, radius, pos, state)) {
                 level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
                 iterator.remove();
                 converted++;
@@ -180,7 +182,7 @@ public final class SulfurPhysics implements ModInitializer {
             || state.getBlock().asItem() == Items.AIR;
     }
 
-    private static boolean spawnMovingSulfurCube(ServerLevel level, Vec3 explosionCenter, BlockPos pos, BlockState state) {
+    private static boolean spawnMovingSulfurCube(ServerLevel level, Vec3 explosionCenter, float explosionRadius, BlockPos pos, BlockState state) {
         Item visualItem = state.getBlock().asItem();
         if (visualItem == Items.AIR) {
             return false;
@@ -198,7 +200,7 @@ public final class SulfurPhysics implements ModInitializer {
         keepInvisible(cube);
         cube.equipItem(new ItemStack(visualItem));
 
-        Vec3 velocity = calculateExplosionImpulse(level, explosionCenter, pos);
+        Vec3 velocity = calculateExplosionImpulse(level, explosionCenter, explosionRadius, pos);
         cube.setDeltaMovement(velocity);
         cube.hurtMarked = true;
 
@@ -209,7 +211,7 @@ public final class SulfurPhysics implements ModInitializer {
         return spawned;
     }
 
-    private static Vec3 calculateExplosionImpulse(ServerLevel level, Vec3 explosionCenter, BlockPos pos) {
+    private static Vec3 calculateExplosionImpulse(ServerLevel level, Vec3 explosionCenter, float explosionRadius, BlockPos pos) {
         Vec3 offset = Vec3.atCenterOf(pos).subtract(explosionCenter);
         if (offset.lengthSqr() <= 1.0E-6D) {
             offset = new Vec3(
@@ -219,12 +221,25 @@ public final class SulfurPhysics implements ModInitializer {
             );
         }
 
-        double distance = Math.max(1.0D, offset.length());
-        double impulse = Math.max(EXPLOSION_MIN_IMPULSE, Math.min(EXPLOSION_MAX_IMPULSE, EXPLOSION_BASE_IMPULSE / Math.sqrt(distance)));
-        Vec3 direction = offset.normalize().add(0.0D, EXPLOSION_UPWARD_BIAS, 0.0D).normalize();
-        double turbulenceX = (level.getRandom().nextDouble() - 0.5D) * 0.08D;
-        double turbulenceZ = (level.getRandom().nextDouble() - 0.5D) * 0.08D;
-        return direction.scale(impulse).add(turbulenceX, 0.05D, turbulenceZ);
+        double radius = Math.max(DEFAULT_EXPLOSION_RADIUS, explosionRadius);
+        double distance = Math.max(0.25D, offset.length());
+        double falloffRange = radius * EXPLOSION_FALLOFF_RANGE_MULTIPLIER;
+        double distanceFalloff = 1.0D - Math.min(distance / falloffRange, 1.0D);
+        double localBlastPower = 0.25D + 0.75D * distanceFalloff;
+        double explosionScale = Math.sqrt(radius / DEFAULT_EXPLOSION_RADIUS);
+        double impulse = clamp(
+            EXPLOSION_MIN_IMPULSE + localBlastPower * EXPLOSION_IMPULSE_MULTIPLIER * explosionScale,
+            EXPLOSION_MIN_IMPULSE,
+            EXPLOSION_MAX_IMPULSE
+        );
+        Vec3 direction = offset.normalize().add(0.0D, EXPLOSION_UPWARD_BIAS * localBlastPower, 0.0D).normalize();
+        double turbulenceX = (level.getRandom().nextDouble() - 0.5D) * 0.12D;
+        double turbulenceZ = (level.getRandom().nextDouble() - 0.5D) * 0.12D;
+        return direction.scale(impulse).add(turbulenceX, 0.08D + 0.12D * localBlastPower, turbulenceZ);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private static void moveWithExplosionPhysics(SulfurCube cube, MovingBlock moving) {
