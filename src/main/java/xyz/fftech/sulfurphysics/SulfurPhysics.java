@@ -11,6 +11,7 @@ import net.fabricmc.api.ModInitializer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
@@ -25,6 +26,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.PushReaction;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +52,7 @@ public final class SulfurPhysics implements ModInitializer {
     private static final double GROUND_FRICTION = 0.62D;
     private static final double COLLISION_DAMPING = 0.25D;
     private static final double COLLISION_EPSILON = 1.0E-5D;
+    private static final float IMMOVABLE_EXPLOSION_RESISTANCE = 100.0F;
 
     private static final Map<UUID, MovingBlock> MOVING_BLOCKS = new ConcurrentHashMap<>();
 
@@ -65,6 +68,8 @@ public final class SulfurPhysics implements ModInitializer {
 
         BlockPos centerBlock = BlockPos.containing(center);
         int converted = 0;
+        int keptImmovable = 0;
+        int leftToVanilla = 0;
 
         for (Iterator<BlockPos> iterator = affectedBlocks.iterator(); iterator.hasNext();) {
             BlockPos pos = iterator.next();
@@ -78,15 +83,34 @@ public final class SulfurPhysics implements ModInitializer {
                 continue;
             }
 
+            ExplosionBlockAction action = chooseExplosionBlockAction(level, pos, state);
+            if (action == ExplosionBlockAction.STAY_PUT) {
+                iterator.remove();
+                keptImmovable++;
+                continue;
+            }
+            if (action == ExplosionBlockAction.BREAK_OR_TRIGGER_NORMALLY) {
+                leftToVanilla++;
+                continue;
+            }
+
             if (spawnMovingSulfurCube(level, center, pos, state)) {
                 level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
                 iterator.remove();
                 converted++;
+            } else {
+                leftToVanilla++;
             }
         }
 
-        if (converted > 0 && LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Converted {} outer explosion blocks into sulfur cubes at {}", converted, center);
+        if ((converted > 0 || keptImmovable > 0 || leftToVanilla > 0) && LOGGER.isDebugEnabled()) {
+            LOGGER.debug(
+                "Explosion block handling at {}: launched={}, immovable={}, vanilla={}",
+                center,
+                converted,
+                keptImmovable,
+                leftToVanilla
+            );
         }
     }
 
@@ -127,6 +151,33 @@ public final class SulfurPhysics implements ModInitializer {
         for (UUID id : finished) {
             MOVING_BLOCKS.remove(id);
         }
+    }
+
+    private static ExplosionBlockAction chooseExplosionBlockAction(ServerLevel level, BlockPos pos, BlockState state) {
+        if (shouldStayPut(state)) {
+            return ExplosionBlockAction.STAY_PUT;
+        }
+        if (shouldBreakOrTriggerNormally(level, pos, state)) {
+            return ExplosionBlockAction.BREAK_OR_TRIGGER_NORMALLY;
+        }
+        return ExplosionBlockAction.LAUNCH_AS_CUBE;
+    }
+
+    private static boolean shouldStayPut(BlockState state) {
+        return state.getBlock().getExplosionResistance() >= IMMOVABLE_EXPLOSION_RESISTANCE
+            || state.getPistonPushReaction() == PushReaction.BLOCK
+            || state.is(BlockTags.WITHER_IMMUNE)
+            || state.is(BlockTags.DRAGON_IMMUNE);
+    }
+
+    private static boolean shouldBreakOrTriggerNormally(ServerLevel level, BlockPos pos, BlockState state) {
+        return state.is(Blocks.TNT)
+            || state.hasBlockEntity()
+            || state.getPistonPushReaction() == PushReaction.DESTROY
+            || state.canBeReplaced()
+            || !state.blocksMotion()
+            || state.getCollisionShape(level, pos).isEmpty()
+            || state.getBlock().asItem() == Items.AIR;
     }
 
     private static boolean spawnMovingSulfurCube(ServerLevel level, Vec3 explosionCenter, BlockPos pos, BlockState state) {
@@ -247,6 +298,12 @@ public final class SulfurPhysics implements ModInitializer {
         return Math.abs(pos.getX() - centerBlock.getX()) <= VANILLA_BREAK_CHEBYSHEV_RADIUS
             && Math.abs(pos.getY() - centerBlock.getY()) <= VANILLA_BREAK_CHEBYSHEV_RADIUS
             && Math.abs(pos.getZ() - centerBlock.getZ()) <= VANILLA_BREAK_CHEBYSHEV_RADIUS;
+    }
+
+    private enum ExplosionBlockAction {
+        LAUNCH_AS_CUBE,
+        BREAK_OR_TRIGGER_NORMALLY,
+        STAY_PUT
     }
 
     private static final class MovingBlock {
