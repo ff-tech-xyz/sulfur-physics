@@ -1,0 +1,92 @@
+plugins {
+	id 'fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	mavenCentral()
+}
+
+def localMinecraftMetadataServer = {
+	def metadataDir = file("gradle/minecraft")
+	def server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+	server.createContext("/26.2-custom.json") { exchange ->
+		byte[] body = new File(metadataDir, "26.2-custom.json").bytes
+		exchange.responseHeaders.add("Content-Type", "application/json")
+		exchange.sendResponseHeaders(200, body.length)
+		exchange.responseBody.write(body)
+		exchange.close()
+	}
+	server.start()
+	gradle.buildFinished { server.stop(0) }
+	return "http://127.0.0.1:${server.address.port}/26.2-custom.json"
+}.call()
+
+loom {
+	noIntermediateMappings()
+	customMinecraftMetadata.set(localMinecraftMetadataServer)
+
+	mods {
+		"sulfur-physics" {
+			sourceSet sourceSets.main
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings files("gradle/minecraft/identity-official-26.2.jar")
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": inputs.properties.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	inputs.property "archivesName", project.base.archivesName
+
+	from("LICENSE") {
+		rename { "${it}_${project.archives_base_name}"}
+	}
+
+	manifest {
+		attributes(
+			'Environment': 'server'
+		)
+	}
+}
+
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			from components.java
+		}
+	}
+
+	repositories {
+		mavenLocal()
+	}
+}
