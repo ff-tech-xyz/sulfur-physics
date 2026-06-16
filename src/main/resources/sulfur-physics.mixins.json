@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "xyz.fftech.sulfurphysics.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ServerExplosionMixin",
+    "ServerLevelMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
