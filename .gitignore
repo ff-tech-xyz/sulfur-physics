@@ -1,9 +1,0 @@
-.gradle/
-build/
-out/
-run/
-.idea/
-*.iml
-.vscode/
-.DS_Store
-Thumbs.db
